@@ -14,9 +14,7 @@ class AuditRequest(BaseModel):
     url: str
 
 
-# --------------------------
-# CREATE AUDIT JOB
-# --------------------------
+# create audit job
 @app.post("/audit")
 def run_audit(data: AuditRequest):
 
@@ -27,6 +25,7 @@ def run_audit(data: AuditRequest):
         "url": data.url
     }
 
+    # push job to queue
     r.rpush("audit_queue", json.dumps(job_data))
 
     return {
@@ -35,9 +34,7 @@ def run_audit(data: AuditRequest):
     }
 
 
-# --------------------------
-# GET RESULT
-# --------------------------
+# get audit result
 @app.get("/result/{job_id}")
 def get_result(job_id: str):
 
@@ -47,3 +44,12 @@ def get_result(job_id: str):
         return json.loads(result)
 
     return {"status": "processing"}
+
+
+# get history
+@app.get("/history")
+def get_history(url: str):
+
+    history = r.lrange(f"history:{url}", 0, -1)
+
+    return [json.loads(h) for h in history]
