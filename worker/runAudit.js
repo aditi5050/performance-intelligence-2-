@@ -24,18 +24,13 @@ async function runLighthouse(url) {
     cls: audits['cumulative-layout-shift'].numericValue,
     tbt: audits['total-blocking-time'].numericValue
   };
+  
+console.log(JSON.stringify(result));
 
-  console.log("RESULT:");
-  console.log(result);
 
   await chrome.kill();
 }
 
 const url = process.argv[2];
-
-if (!url) {
-  console.log("Usage: node runAudit.js https://example.com");
-  process.exit();
-}
 
 runLighthouse(url);
