@@ -5,13 +5,8 @@ import redis
 import json
 import uuid
 
-# ==============================
-# APP INIT
-# ==============================
-
 app = FastAPI()
 
-# enable CORS (for frontend dashboard)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -20,15 +15,53 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# connect redis
 r = redis.Redis(host="localhost", port=6379, decode_responses=True)
 
 # ==============================
-# REQUEST MODEL
+# REQUEST MODELS
 # ==============================
 
 class AuditRequest(BaseModel):
     url: str
+
+class ExplainRequest(BaseModel):
+    job_id: str
+    question: str
+
+# ==============================
+# AI ENGINE
+# ==============================
+
+def generate_reasoned_answer(data, question):
+
+    q = question.lower()
+    response = []
+
+    if "wrong" in q or "problem" in q:
+        if data.get("lcp",0) > 4000:
+            response.append("Main content loads very late (High LCP).")
+        if data.get("tbt",0) > 300:
+            response.append("Heavy JavaScript blocks interaction.")
+
+    if "slow" in q:
+        response.append(f"LCP = {data.get('lcp')}ms indicates slow rendering.")
+
+    if "traffic" in q:
+        response.append("High traffic may worsen performance due to heavy assets.")
+
+    if "fix" in q:
+        suggestions = data.get("suggestions",[])
+        if suggestions:
+            best = suggestions[0]
+            response.append(f"Best fix: {best['issue']} → {best['fix']}")
+
+    if "code" in q:
+        response.append("<img loading='lazy'> or dynamic React imports.")
+
+    if not response:
+        response.append("Performance mainly affected by rendering and JS blocking.")
+
+    return " ".join(response)
 
 # ==============================
 # CREATE AUDIT JOB
@@ -44,7 +77,6 @@ def run_audit(data: AuditRequest):
         "url": data.url
     }
 
-    # push job to queue
     r.rpush("audit_queue", json.dumps(job_data))
 
     return {
@@ -64,7 +96,7 @@ def get_result(job_id: str):
     if result:
         return json.loads(result)
 
-    return {"status": "processing"}
+    return {"status":"processing"}
 
 # ==============================
 # GET HISTORY
@@ -73,6 +105,24 @@ def get_result(job_id: str):
 @app.get("/history")
 def get_history(url: str):
 
-    history = r.lrange(f"history:{url}", 0, -1)
+    history = r.lrange(f"history:{url}",0,-1)
 
     return [json.loads(h) for h in history]
+
+# ==============================
+# AI EXPLAIN ENDPOINT
+# ==============================
+
+@app.post("/explain")
+def explain(req: ExplainRequest):
+
+    result = r.get(f"result:{req.job_id}")
+
+    if not result:
+        return {"error":"job not found"}
+
+    data = json.loads(result)
+
+    answer = generate_reasoned_answer(data, req.question)
+
+    return {"answer":answer}
