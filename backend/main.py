@@ -4,6 +4,24 @@ from pydantic import BaseModel
 import redis
 import json
 import uuid
+import os
+
+from dotenv import load_dotenv
+import google.generativeai as genai
+
+# ==============================
+# LOAD ENV
+# ==============================
+
+load_dotenv()
+
+genai.configure(
+    api_key=os.getenv("GEMINI_API_KEY")
+)
+
+# ==============================
+# APP INIT
+# ==============================
 
 app = FastAPI()
 
@@ -15,6 +33,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# connect redis
 r = redis.Redis(host="localhost", port=6379, decode_responses=True)
 
 # ==============================
@@ -29,39 +48,52 @@ class ExplainRequest(BaseModel):
     question: str
 
 # ==============================
-# AI ENGINE
+# GEMINI AI ENGINE
 # ==============================
 
 def generate_reasoned_answer(data, question):
 
-    q = question.lower()
-    response = []
+    try:
 
-    if "wrong" in q or "problem" in q:
-        if data.get("lcp",0) > 4000:
-            response.append("Main content loads very late (High LCP).")
-        if data.get("tbt",0) > 300:
-            response.append("Heavy JavaScript blocks interaction.")
+        model = genai.GenerativeModel("models/gemini-2.5-flash")
 
-    if "slow" in q:
-        response.append(f"LCP = {data.get('lcp')}ms indicates slow rendering.")
+        prompt = f"""
+You are a senior website performance engineer AI.
 
-    if "traffic" in q:
-        response.append("High traffic may worsen performance due to heavy assets.")
+User Question:
+{question}
 
-    if "fix" in q:
-        suggestions = data.get("suggestions",[])
-        if suggestions:
-            best = suggestions[0]
-            response.append(f"Best fix: {best['issue']} → {best['fix']}")
+Website Lighthouse Audit Data:
+{json.dumps(data, indent=2)}
 
-    if "code" in q:
-        response.append("<img loading='lazy'> or dynamic React imports.")
+Explain clearly:
 
-    if not response:
-        response.append("Performance mainly affected by rendering and JS blocking.")
+1) What is wrong
+2) What takes the most time
+3) Root cause of performance issues
+4) What happens if traffic increases
+5) Best prioritized fixes
+6) Provide example code fixes if useful
 
-    return " ".join(response)
+Answer in simple but technical language.
+"""
+
+        response = model.generate_content(prompt)
+
+        return response.text
+
+    except Exception as e:
+
+        print("GEMINI ERROR:", e)
+
+        # SAFE FALLBACK (app never breaks)
+        lcp = data.get("lcp", 0)
+        tbt = data.get("tbt", 0)
+
+        if lcp > tbt:
+            return f"LCP ({lcp} ms) is main performance bottleneck."
+        else:
+            return f"JavaScript blocking time ({tbt}) causes delay."
 
 # ==============================
 # CREATE AUDIT JOB
@@ -96,7 +128,7 @@ def get_result(job_id: str):
     if result:
         return json.loads(result)
 
-    return {"status":"processing"}
+    return {"status": "processing"}
 
 # ==============================
 # GET HISTORY
@@ -105,12 +137,12 @@ def get_result(job_id: str):
 @app.get("/history")
 def get_history(url: str):
 
-    history = r.lrange(f"history:{url}",0,-1)
+    history = r.lrange(f"history:{url}", 0, -1)
 
     return [json.loads(h) for h in history]
 
 # ==============================
-# AI EXPLAIN ENDPOINT
+# AI EXPLANATION ENDPOINT
 # ==============================
 
 @app.post("/explain")
@@ -119,10 +151,10 @@ def explain(req: ExplainRequest):
     result = r.get(f"result:{req.job_id}")
 
     if not result:
-        return {"error":"job not found"}
+        return {"error": "job not found"}
 
     data = json.loads(result)
 
     answer = generate_reasoned_answer(data, req.question)
 
-    return {"answer":answer}
+    return {"answer": answer}
